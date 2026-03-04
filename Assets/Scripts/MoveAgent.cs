@@ -1,81 +1,83 @@
+using System;
 using UnityEngine;
+using UnityEngine.AI;
 
-[DisallowMultipleComponent]
+[RequireComponent(typeof(NavMeshAgent))]
 public class MoveAgent : MonoBehaviour
 {
-    [Header("Optional physics")]
-    [SerializeField] private Rigidbody rb;
-    [SerializeField] private bool useRigidbodyWhenPossible = true;
+    [SerializeField] private NavMeshAgent agent;
+    public event Action<MoveAgent> Reached;
 
-    public bool IsActive { get; private set; }
-    public Vector3 Target { get; private set; }
-    public float Speed { get; private set; }
-    public float StopDistance { get; private set; }
-    public MoveAlgorithm Algorithm { get; private set; }
+    private bool hasDestination;
 
-    public System.Action<MoveAgent> OnReachedTarget;
-
-    private Transform _tr;
+    private Vector3 _zoneCenter;
+    private Vector3 _zoneSize;
+    private bool _zoneAssigned;
 
     private void Awake()
     {
-        _tr = transform;
-        if (rb == null) rb = GetComponent<Rigidbody>();
+        if (agent == null) agent = GetComponent<NavMeshAgent>();
     }
 
-    private void OnDisable()
+    public void OnPooledGet()
     {
-        if (rb != null) rb.velocity = Vector3.zero;
-        IsActive = false;
+        if (agent != null) agent.enabled = true;
+        hasDestination = false;
     }
 
-    public void Activate(Vector3 startPos, Vector3 target, float speed, float stopDistance, MoveAlgorithm algorithm)
+    public void OnPooledRelease()
     {
-        _tr.position = startPos;
-        Target = target;
-        Speed = Mathf.Max(0.01f, speed);
-        StopDistance = Mathf.Max(0.001f, stopDistance);
-        Algorithm = algorithm;
-        IsActive = true;
-
-        gameObject.SetActive(true);
+        if (agent != null)
+        {
+            agent.isStopped = true;
+            agent.ResetPath();
+        }
+        hasDestination = false;
     }
 
-    public void Deactivate()
+    public void SetDespawnZone(Vector3 center, Vector3 size)
     {
-        IsActive = false;
-        gameObject.SetActive(false);
+        _zoneCenter = center;
+        _zoneSize = size;
+        _zoneAssigned = true;
     }
 
-    public void Tick(float dt)
+    public void TeleportTo(Vector3 pos)
     {
-        if (!IsActive) return;
+        transform.position = pos;
+        if (agent != null && agent.enabled)
+        {
+            agent.Warp(pos);
+            agent.ResetPath();
+            agent.isStopped = true;
+        }
+    }
 
-        Vector3 pos = _tr.position;
-        float dist = Vector3.Distance(pos, Target);
-        if (dist <= StopDistance)
+    public void MoveTo(Vector3 worldPoint)
+    {
+        if (agent == null || !agent.enabled) return;
+        agent.isStopped = false;
+        agent.SetDestination(worldPoint);
+        hasDestination = true;
+    }
+
+    private void Update()
+    {
+        if (!hasDestination || agent == null || !agent.enabled) return;
+        if (!_zoneAssigned) return;
+        if (IsInsideZoneXZ(transform.position, _zoneCenter, _zoneSize))
         {
-            OnReachedTarget?.Invoke(this);
-            return;
+            hasDestination = false;
+            Reached?.Invoke(this);
         }
-        if (Algorithm == MoveAlgorithm.Lerp)
-        {
-            _tr.position = Algorithms.MoveLerp(pos, Target, Speed, dt);
-        }
-        else if (Algorithm == MoveAlgorithm.MoveTowards)
-        {
-            _tr.position = Algorithms.MoveTowards(pos, Target, Speed, dt);
-        }
-        else 
-        {
-            if (useRigidbodyWhenPossible && rb != null)
-            {
-                rb.velocity = Algorithms.VelocityToTarget(pos, Target, Speed);
-            }
-            else
-            {
-                _tr.position = Algorithms.MoveTowards(pos, Target, Speed, dt);
-            }
-        }
+    }
+
+    private static bool IsInsideZoneXZ(Vector3 p, Vector3 c, Vector3 size)
+    {
+        float hx = size.x * 0.5f;
+        float hz = size.z * 0.5f;
+
+        return p.x >= c.x - hx && p.x <= c.x + hx &&
+               p.z >= c.z - hz && p.z <= c.z + hz;
     }
 }
